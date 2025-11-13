@@ -17,14 +17,6 @@ const {
   getFullMessage,
   fetchRecentChats,
 } = require("../core/store");
-const {
-  isLid,
-  isJid,
-  getBotId,
-  getNumericId,
-  getSudoIdentifier,
-  isPrivateMessage,
-} = require("./utils/lid-helper");
 var handler = HANDLERS !== "false" ? HANDLERS.split("")[0] : "";
 
 Module(
@@ -294,76 +286,67 @@ Module(
 Module(
   {
     pattern: "quoted",
-    fromMe: false,
+    fromMe: true,
     desc: "Sends replied message's replied message. Useful for recovering deleted messages.",
     usage: ".quoted (reply to a quoted message)",
     use: "group",
   },
   async (message, match) => {
-    if (!message.isGroup) return await message.sendReply("_Group command!_");
-    let adminAccesValidated = ADMIN_ACCESS
-      ? await isAdmin(message, message.sender)
-      : false;
-    if (message.fromOwner || adminAccesValidated) {
-      if (!message.reply_message) {
-        return await message.sendReply("_Please reply to a message!_");
-      }
-      try {
-        const repliedMessage = await getFullMessage(
-          message.reply_message.id + "_"
+    try {
+      const repliedMessage = await getFullMessage(
+        message.reply_message.id + "_"
+      );
+      if (!repliedMessage.found) {
+        return await message.sendReply(
+          "_Original message not found in database!_"
         );
-        if (!repliedMessage.found) {
-          return await message.sendReply(
-            "_Original message not found in database!_"
-          );
-        }
-        const messageData = repliedMessage.messageData;
-        let quotedMessageId = null;
-        let quotedMessage = null;
-        let participant = null;
-        if (messageData.message) {
-          const msgKeys = Object.keys(messageData.message);
-          for (const key of msgKeys) {
-            const msgContent = messageData.message[key];
-            if (msgContent?.contextInfo?.stanzaId) {
-              quotedMessageId = msgContent.contextInfo.stanzaId;
-              quotedMessage = msgContent.contextInfo.quotedMessage;
-              participant = msgContent.contextInfo.participant;
-              break;
-            }
+      }
+      const messageData = repliedMessage.messageData;
+      let quotedMessageId = null;
+      let quotedMessage = null;
+      let participant = null;
+      if (messageData.message) {
+        const msgKeys = Object.keys(messageData.message);
+        for (const key of msgKeys) {
+          const msgContent = messageData.message[key];
+          if (msgContent?.contextInfo?.stanzaId) {
+            quotedMessageId = msgContent.contextInfo.stanzaId;
+            quotedMessage = msgContent.contextInfo.quotedMessage;
+            participant = msgContent.contextInfo.participant;
+            break;
           }
         }
-        if (!quotedMessageId) {
-          return await message.sendReply(
-            "_The replied message doesn't contain a quoted message!_"
-          );
-        }
-        const originalQuoted = await getFullMessage(quotedMessageId + "_");
-        if (originalQuoted.found) {
-          return await message.forwardMessage(
-            message.jid,
-            originalQuoted.messageData
-          );
-        } else if (quotedMessage) {
-          const reconstructedMsg = {
-            key: {
-              remoteJid: message.jid,
-              fromMe: false,
-              id: quotedMessageId,
-              participant: participant,
-            },
-            message: quotedMessage,
-          };
-          return await message.forwardMessage(message.jid, reconstructedMsg);
-        } else {
-          return await message.sendReply(
-            "_Quoted message not found and no cached data available!_"
-          );
-        }
-      } catch (error) {
-        console.error("Error in quoted command:", error);
-        return await message.sendReply("_Failed to load quoted message!_");
       }
+      if (!quotedMessageId) {
+        return await message.sendReply(
+          "_The replied message doesn't contain a quoted message!_"
+        );
+      }
+      const originalQuoted = await getFullMessage(quotedMessageId);
+      if (originalQuoted.found) {
+        return await message.forwardMessage(
+          message.jid,
+          originalQuoted.messageData
+        );
+      } else if (quotedMessage) {
+        const reconstructedMsg = {
+          key: {
+            remoteJid: message.jid,
+            fromMe: false,
+            id: quotedMessageId,
+            participant: participant,
+          },
+          message: quotedMessage,
+        };
+        return await message.forwardMessage(message.jid, reconstructedMsg);
+      } else {
+        return await message.sendReply(
+          "_Quoted message not found and no cached data available!_"
+        );
+      }
+    } catch (error) {
+      console.error("Error in quoted command:", error);
+      return await message.sendReply("_Failed to load quoted message!_");
     }
   }
 );
@@ -658,9 +641,9 @@ Module(
         var msg = `_Kicking common participants of:_ *${g1.subject}* & *${g2.subject}*\n_count: ${common.length}_\n`;
         common
           .map((e) => e.id)
-          .filter((e) => !e.includes(getNumericId(getBotId(message.client))))
+          .filter((e) => !e.includes(message.client.user?.id?.split(":")[0]))
           .map(async (s) => {
-            msg += "```@" + getNumericId(s) + "```\n";
+            msg += "```@" + s.split("@")[0] + "```\n";
             jids.push(s);
           });
         await message.client.sendMessage(message.jid, {
@@ -687,7 +670,7 @@ Module(
       var jids = [];
       common.map(async (s) => {
         msg += "```@" + s.id.split("@")[0] + "```\n";
-        jids.push(s.id.split("@")[0] + "@s.whatsapp.net");
+        jids.push(s.id);
       });
       await message.client.sendMessage(message.jid, {
         text: msg,
@@ -772,10 +755,7 @@ Module(
       msgText += `${targets.length}. @${p.id.split("@")[0]}\n`;
     }
     if (isReply) {
-      await message.client.sendMessage(message.jid, {
-        forward: message.quoted,
-        mentions: targets,
-      });
+      await message.forwardMessage(message.jid, message.quoted,{detectLinks: true,contextInfo: {mentionedJid: targets, isForwarded: false}});
     } else {
       await message.client.sendMessage(message.jid, {
         text: "```" + msgText + "```",
@@ -978,10 +958,10 @@ Module(
   async (message, match) => {
     if (message.reply_message && message.reply_message.image) {
       var image = await message.reply_message.download();
-      await message.client.setProfilePicture(
-        message.client.user.id.split(":")[0] + "@s.whatsapp.net",
-        { url: image }
-      );
+      const botJid = message.client.user?.id?.split(":")[0] + "@s.whatsapp.net";
+      await message.client.setProfilePicture(botJid, {
+        url: image,
+      });
       return await message.sendReply("_*Updated profile pic ✅*_");
     }
     if (message.reply_message && !message.reply_message.image) {

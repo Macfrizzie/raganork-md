@@ -64,7 +64,6 @@ async function saveSystemPrompt(prompt) {
 
 async function imageToGenerativePart(imageBuffer) {
   try {
-
     const data = imageBuffer.toString("base64");
 
     return {
@@ -507,11 +506,10 @@ Module(
 
       let shouldRespond = false;
       const messageText = message.text;
-
       if (isDM) {
         shouldRespond = true;
       } else if (isGroup) {
-        const botJid = message.client.user?.id;
+        const botJid = message.client.user?.lid;
 
         if (message.mention && message.mention.length > 0) {
           const botMentioned = message.mention.some((jid) => {
